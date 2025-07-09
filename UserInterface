@@ -1,6 +1,0 @@
-
--- template
--- in luau
-local function thisIsATemplate()
-  print("me: ok")
-end
