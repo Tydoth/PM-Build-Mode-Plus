@@ -1,0 +1,629 @@
+
+--TODO: fix this code because it is so messy
+
+--[[ services ]] --
+
+local CollectionService = game:GetService("CollectionService")
+local ContentProvider = game:GetService("ContentProvider")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+
+-- [[ player ]] --
+
+local Player = Players.LocalPlayer
+local PlayerGui = Player.PlayerGui
+
+-- [[ frames ]] --
+
+local StarterInterface = PlayerGui:WaitForChild("StarterInterface")
+local BuildModeScreen = StarterInterface:WaitForChild("BuildMode")
+
+local SelectorFrame = BuildModeScreen:WaitForChild("Selector")
+local TabsScrollingFrame = SelectorFrame:WaitForChild("Tabs")
+local TabFrames = SelectorFrame:WaitForChild("TabFrames")
+
+local propertiesFrame = BuildModeScreen:WaitForChild("EditProperty")
+local propertiesTitle = propertiesFrame:WaitForChild("ObjectTitle")
+local propertiesDisplay = propertiesFrame:WaitForChild("PropertyDisplay")
+
+-- [[tab frames]] --
+
+local WallSelect = TabFrames:WaitForChild("Walls")
+local Hostiles = TabFrames:WaitForChild("Hostiles")
+local Essential = TabFrames:WaitForChild("Essential")
+local SublevelInfo = TabFrames:WaitForChild("Info")
+local Settings = TabFrames:WaitForChild("Settings")
+
+local template = SelectorFrame:WaitForChild("Template")
+
+-- [[ variables ]] --
+
+local currentTab: string
+local selected = ReplicatedStorage:WaitForChild("Programming"):WaitForChild("Variables"):WaitForChild("CurrentlySelected")
+
+local Grid: NumberValue = game:GetService("Players").LocalPlayer.PlayerScripts:WaitForChild("Variables"):WaitForChild("SnapToGrid")
+local RotateInterval: NumberValue = game:GetService("Players").LocalPlayer.PlayerScripts:WaitForChild("Variables"):WaitForChild("RotateInterval")
+
+local tempPreview
+local rotation: number = 0
+local currentlyHoveringOn = nil
+local currentlySelected: Instance = nil
+local outline
+
+-- [[ sublevel info ]] --
+
+local sublevelInfo: {
+	Title: string,
+	Description: string,
+	Image: string,
+	Rating: string,
+	Privacy: boolean
+}
+	=
+	{
+		["Title"] = "",
+		["Description"] = "",
+		["Image"] = "",
+		["Rating"] = "",
+		["Privacy"] = false
+	}
+
+local rating: number
+local description: string
+local title: string
+local image: string
+local privacy: boolean
+
+-- [[ helper funcs]] --
+
+local function tabCheck(tabToOpen: ScrollingFrame)
+	for _, tab in pairs(SelectorFrame.TabFrames:GetChildren()) do
+		if tab.Name ~= tabToOpen.Name then
+			local tween = TweenService:Create(tab, TweenInfo.new(0.1), {Size = UDim2.new(0.05, 0, 1, 0)})
+			tween:Play()
+			tween.Completed:Connect(function(playbackState: Enum.PlaybackState) 
+				tab.Visible = false
+			end)
+		else
+			if tab.Visible == true then
+				local tween = TweenService:Create(tab, TweenInfo.new(0.1), {Size = UDim2.new(0.05, 0, 1, 0)})
+				tween:Play()
+				tween.Completed:Connect(function(playbackState: Enum.PlaybackState) 
+					tab.Visible = false
+				end)
+			else
+				local tween = TweenService:Create(tab, TweenInfo.new(0.1), {Size = UDim2.new(0.8, 0, 1, 0)})
+				tab.Size = UDim2.new(0.05, 0, 1, 0)
+				tab.Visible = true
+				tween:Play()
+			end
+		end
+	end
+end
+
+local function closeSubTabs()
+	for _, potentialSubTab in pairs(CollectionService:GetTagged("SubTab")) do
+		local Tween = TweenService:Create(potentialSubTab, TweenInfo.new(0.1), {Size = UDim2.new(0.05,0,0.05,0)})
+		Tween:Play()
+
+		Tween.Completed:Connect(function(playbackState: Enum.PlaybackState)
+			potentialSubTab:Destroy()
+		end)
+	end
+	for _, v in pairs(TabsScrollingFrame:GetChildren()) do
+		v:SetAttribute("SubTabsOpen", false)
+	end
+end
+
+local function createDisplay(obj: Instance, parent: Instance)
+	local templateToClone: TextButton = template:Clone()
+	local viewport: ViewportFrame = templateToClone:WaitForChild("Viewport")
+	local templatePart = obj:Clone()
+	templatePart.Parent = viewport
+
+	local title: TextLabel = templateToClone:WaitForChild("Title")
+	title.Text = obj.Name
+
+	templateToClone.Name = obj.Name
+	templateToClone.Parent = parent
+	templateToClone.Visible = true
+
+	templateToClone.Activated:Connect(function(inputObject: InputObject, clickCount: number)
+		if templateToClone.BackgroundTransparency == 1 then
+			templateToClone.BackgroundTransparency = 0.75
+		else
+			templateToClone.BackgroundTransparency = 1
+		end
+
+		for _, v in pairs(templateToClone.Parent:GetChildren()) do
+			if v:IsA("TextButton") and v ~= templateToClone then
+				v.BackgroundTransparency = 1
+			end
+		end
+
+		ReplicatedStorage.Programming.Events.Select:FireServer(obj)
+
+		ReplicatedStorage.Cosmetics.Sounds.Click:Play()
+	end)
+
+	task.spawn(function()
+		if templatePart:IsA("BasePart") then
+			while true do
+				local tween = TweenService:Create(templatePart, TweenInfo.new(3, Enum.EasingStyle.Linear), {Rotation = Vector3.new(templatePart.Rotation.X, templatePart.Rotation.Y + 360, templatePart.Rotation.Z)})
+				tween:Play()
+				tween.Completed:Wait()
+			end
+		elseif templatePart:IsA("Model") then
+			while true do
+				local tween = TweenService:Create(templatePart.root, TweenInfo.new(3, Enum.EasingStyle.Linear), {CFrame = CFrame.new(0, 0, -15) * CFrame.Angles(0, math.rad(templatePart.root.CFrame.Rotation.Y + 180), 0)})
+				tween:Play()
+				tween.Completed:Wait()
+			end
+		end
+	end)
+end
+
+-- [[ preview helper funcs ]] --
+
+local function snapToGrid(value)
+	return math.floor((value + Grid.Value / 2) / Grid.Value) * Grid.Value
+end
+
+local function bufferItem(item: Instance): {}
+	local components = workspace:WaitForChild("Holder"):WaitForChild("SublevelPreview"):GetChildren()
+
+	for _, v in pairs(components) do
+		if v.Name == "Spawn" then
+			if item.Name == v.Name then
+				_G.LogMessage("Input Error", "You can only place one spawn point!", 5, "rbxassetid://6033337319")
+				return
+			end
+		end
+	end
+
+	ReplicatedStorage.Cosmetics.Sounds.Place:Play()
+	if item:IsA("BasePart") then
+		ReplicatedStorage.Programming.Events.Create:FireServer(item, tempPreview.Position, Vector3.new(0, rotation, 0))
+	elseif item:IsA("Model") then
+		ReplicatedStorage.Programming.Events.Create:FireServer(item, tempPreview.PrimaryPart.Position, Vector3.new(0, rotation, 0))
+	end
+end
+
+-- Utility: Get the ray from the mouse position (camera)
+local function GetMouseRay()
+	local Players = game:GetService("Players")
+	local Workspace = game:GetService("Workspace")
+	local player = Players.LocalPlayer
+	local mouse = player:GetMouse()
+	local camera = Workspace.CurrentCamera
+
+	if not camera then
+		return nil
+	end
+
+	-- Get the mouse's position on the screen
+	local mousePos = Vector2.new(mouse.X, mouse.Y)
+	-- Create a ray from the camera through the mouse position
+	local unitRay = camera:ScreenPointToRay(mousePos.X, mousePos.Y)
+	return unitRay
+end
+
+-- Raycast from mouse, returns result and ray
+local function RaycastFromMouse(params: RaycastParams): RaycastResult
+	local Players = game:GetService("Players")
+	local Workspace = game:GetService("Workspace")
+	local player = Players.LocalPlayer
+	local camera = Workspace.CurrentCamera
+
+	if not camera then
+		return nil
+	end
+
+	local unitRay = GetMouseRay()
+	if not unitRay then
+		return nil
+	end
+
+	local raycastParams = RaycastParams.new()
+	if player.Character then
+		raycastParams.FilterDescendantsInstances = {workspace.Baseplate, workspace.Holder.SublevelPreview:GetChildren()}
+		raycastParams.FilterType = Enum.RaycastFilterType.Include
+	end
+
+	local result = Workspace:Raycast(unitRay.Origin, unitRay.Direction * 1000, raycastParams)
+	if result and result.Instance then
+		currentlyHoveringOn = result.Instance
+	end
+
+	return result, unitRay
+end
+
+local function createPropertyUi(v, order: number)
+	local temp: Frame
+	if v:IsA("BoolValue") then
+		temp = propertiesDisplay:WaitForChild("Templates"):WaitForChild("OptionBool"):Clone()
+		local input: TextButton = temp:WaitForChild("OptionInput")
+
+		input.Activated:Connect(function()
+			input.Text = tostring(not v.Value)
+			ReplicatedStorage.Programming.Events.ChangeProperty:FireServer(currentlySelected, v, not v.Value)
+		end)
+	else
+		temp = propertiesDisplay:WaitForChild("Templates"):WaitForChild("OptionGeneral"):Clone()
+		local input: TextBox = temp:WaitForChild("OptionInput")
+
+		input.FocusLost:Connect(function()
+			if v:IsA("NumberValue") or v:IsA("IntValue") then
+				ReplicatedStorage.Programming.Events.ChangeProperty:FireServer(currentlySelected, v, tonumber(input.Text))
+			elseif v:IsA("StringValue") then
+				ReplicatedStorage.Programming.Events.ChangeProperty:FireServer(currentlySelected, v, input.Text)
+			else
+				ReplicatedStorage.Programming.Events.ChangeProperty:FireServer(currentlySelected, v, input.Text)
+			end
+		end)
+	end
+	temp:WaitForChild("OptionTitle").Text = v.Name
+	temp:WaitForChild("OptionInput").Text = tostring(v.Value)
+	temp.LayoutOrder = order or 1
+	temp.Visible = true
+	temp.Parent = propertiesDisplay
+end
+
+-- [[ main funcs ]] --
+
+local UserInterface = {}
+
+function UserInterface.new()
+	-- general tabs
+	do
+		for _, folder: Folder in pairs(ReplicatedStorage:WaitForChild("Programming"):WaitForChild("Objects"):WaitForChild("Faces"):GetChildren()) do
+			if (folder.Name == "Official") then
+				for _, wall in pairs(folder:GetChildren()) do
+					createDisplay(wall, WallSelect)
+				end
+			end
+		end
+		for _, folder: Folder in pairs(ReplicatedStorage:WaitForChild("Programming"):WaitForChild("Objects"):WaitForChild("Hostiles"):GetChildren()) do
+			if (folder.Name == "Smilers") then
+				for _, smiler in pairs(folder:GetChildren()) do
+					createDisplay(smiler, Hostiles)
+				end
+			end
+		end
+		for _, item in pairs(ReplicatedStorage:WaitForChild("Programming"):WaitForChild("Objects"):WaitForChild("Essential"):GetChildren()) do
+			createDisplay(item, Essential)
+		end
+	end
+
+	-- sublevel info tab
+	do
+		do
+			local sublevelName = SublevelInfo:WaitForChild("SublevelName")
+			local sublevelNameInput = sublevelName:WaitForChild("Input")
+
+			sublevelNameInput.FocusLost:Connect(function(input: InputObject) 
+				title = sublevelNameInput.Text
+			end)
+		end
+
+		do
+			local sublevelImage = SublevelInfo:WaitForChild("SublevelImage")
+			local sublevelImageInput = sublevelImage:WaitForChild("Input")
+			local sublevelImageDisplay = sublevelImage:WaitForChild("Display")
+
+			sublevelImageInput.FocusLost:Connect(function(input: InputObject) 
+
+				local assetId = sublevelImageInput.Text
+				local imageUrl = "rbxassetid://" .. assetId or assetId
+
+				local ContentProvider = game:GetService("ContentProvider")
+				local success, err = pcall(function()
+					ContentProvider:PreloadAsync({imageUrl})
+				end)
+
+				if not success then
+					warn("Failed to preload image:", err)
+				end
+
+				image = imageUrl
+				sublevelImageDisplay.Image = imageUrl
+			end)
+		end
+
+		do
+			local sublevelDescription = SublevelInfo:WaitForChild("SublevelDescription")
+			local sublevelDescriptionInput = sublevelDescription:WaitForChild("Input")
+
+			sublevelDescriptionInput.FocusLost:Connect(function(input: InputObject) 
+				description = sublevelDescriptionInput.Text
+			end)
+		end
+
+		do
+			local sublevelRating = SublevelInfo:WaitForChild("SublevelRating")
+			local sublevelRatingInput = sublevelRating:WaitForChild("RatingContainer")
+			for _, v in pairs(sublevelRatingInput:GetChildren()) do
+				if not v:IsA("TextButton") then
+					continue
+				end
+				v.Activated:Connect(function(inputObject: InputObject, clickCount: number) 
+					rating = tonumber(v)
+				end)
+			end
+		end
+
+		do
+			local sublevelPrivacy = SublevelInfo:WaitForChild("SublevelPrivacy")
+			local sublevelPrivacyPublic = sublevelPrivacy:WaitForChild("Public")
+			local sublevelPrivacyPrivate = sublevelPrivacy:WaitForChild("Private")
+
+			sublevelPrivacyPublic.Activated:Connect(function(inputObject: InputObject, clickCount: number) 
+				privacy = true
+			end)
+			sublevelPrivacyPrivate.Activated:Connect(function(inputObject: InputObject, clickCount: number) 
+				privacy = false
+			end)
+		end
+
+		do
+			local sublevelPublisher = SublevelInfo:WaitForChild("SublevelUpdate")
+			local sublevelPublisherInput = sublevelPublisher:WaitForChild("Update")
+
+			sublevelPublisherInput.Activated:Connect(function(inputObject: InputObject, clickCount: number) 
+
+				local canPublish: boolean = true
+				sublevelInfo = {
+					Title = title,
+					Description = description,
+					Image = image,
+					Rating = rating,
+					Privacy = privacy
+				}
+
+				if sublevelInfo.Title == "" or sublevelInfo.Title == nil then
+					canPublish = false
+					_G.LogMessage("Did not update", "Your sublevel has no title!", 5, "rbxassetid://6033337319")
+				end
+
+				if canPublish == true then
+					local components = workspace:WaitForChild("Holder"):WaitForChild("SublevelPreview"):GetChildren()
+
+					local spawnFound: boolean = false
+					local exitFound: boolean = false
+
+					for _, v in pairs(components) do
+						if spawnFound == true and exitFound == true then
+							break
+						end
+
+						if v.Name == "Spawn" then
+							spawnFound = true
+							continue
+						elseif v.Name == "Exit" then
+							exitFound = true
+							continue
+						end
+					end
+
+					if spawnFound == false then
+						_G.LogMessage("Warning", "Your sublevel has no spawn point, so spawning will be random.", 5, "rbxassetid://6033337319")
+					end
+					if exitFound == false then
+						_G.LogMessage("Warning", "Your sublevel has no exit, so players can't proceed.", 5, "rbxassetid://6033337319")
+					end
+
+					ReplicatedStorage.Programming.Events.Update:FireServer(sublevelInfo)
+				end
+
+			end)
+		end
+	end
+
+	-- settings tab
+	do
+		do
+			local snapToGrid = Settings:WaitForChild("SnapToGrid")
+			local snapToGridInput = snapToGrid:WaitForChild("Input")
+			local snapToGridApply = snapToGrid:WaitForChild("Apply")
+
+			snapToGridApply.Activated:Connect(function(inputObject: InputObject, clickCount: number)
+				if tonumber(snapToGridInput.Text) == nil then
+					warn("no")
+					return
+				end
+				Player.PlayerScripts.Variables.SnapToGrid.Value =  tonumber(snapToGridInput.Text)
+			end)
+		end
+
+		do
+			local rotate = Settings:WaitForChild("Rotate")
+			local rotateInput = rotate:WaitForChild("Input")
+			local rotateApply = rotate:WaitForChild("Apply")
+
+			rotateApply.Activated:Connect(function(inputObject: InputObject, clickCount: number)
+				if tonumber(rotateInput.Text) == nil then
+					warn("no")
+					return
+				end
+				Player.PlayerScripts.Variables.RotateInterval.Value = tonumber(rotateInput.Text)
+			end)
+		end
+	end
+
+	-- tab selector
+	do
+		for _, v in pairs(TabsScrollingFrame:GetChildren()) do
+			if not v:IsA("TextButton") then
+				continue	
+			end
+
+			v:SetAttribute("SubTabsOpen", false)
+
+			v.Activated:Connect(function(inputObject: InputObject, clickCount: number)
+				currentTab = v.Name
+
+				if v:FindFirstChild("SubTabs") then
+					if v:GetAttribute("SubTabsOpen") == false then
+						v:SetAttribute("SubTabsOpen", true)
+						ReplicatedStorage.Cosmetics.Sounds.Click:Play()
+
+						for _, subTab in pairs(v.SubTabs:GetChildren()) do
+							local clone: TextButton = subTab:Clone()
+							local Tween = TweenService:Create(clone, TweenInfo.new(0.2), {Size = UDim2.new(0.9,0,0.9,0)})
+							clone.Size = UDim2.new(0.05,0,0.05,0)
+							clone.Visible = true
+							clone.Parent = TabsScrollingFrame
+							clone:AddTag("SubTab")
+							Tween:Play()
+							task.wait(0.02)
+							clone.Activated:Connect(function(inputObject: InputObject, clickCount: number) 
+								tabCheck(subTab)
+							end)
+						end
+					else
+						ReplicatedStorage.Cosmetics.Sounds.ClickEnd:Play()
+						v:SetAttribute("SubTabsOpen", false)
+						closeSubTabs()
+					end
+				else
+					ReplicatedStorage.Cosmetics.Sounds.Click:Play()
+					closeSubTabs()
+					tabCheck(v)
+				end
+			end)
+
+		end
+	end
+
+	task.spawn(function()
+		UserInterface.Preview()
+	end)
+
+	return {}	
+end
+
+function UserInterface.Preview()
+
+	local pastPos: Vector3
+
+	selected.Changed:Connect(function(value: Instance) 
+		if value ~= nil then
+			if tempPreview ~= nil then
+				tempPreview:Destroy()
+				tempPreview = nil
+			end
+			tempPreview = selected.Value:Clone()
+			tempPreview.Parent = workspace.Preview
+		else
+			tempPreview:Destroy()
+			tempPreview = nil
+		end	
+	end)
+
+	UserInputService.InputChanged:Connect(function(input: InputObject, gameProcessedEvent: boolean) 
+		if gameProcessedEvent == true then
+			return
+		end
+
+		local pos = RaycastFromMouse()
+
+		if tempPreview == nil then
+			return
+		end
+
+		if not pos then
+			if pastPos then
+				if tempPreview:IsA("Model") then
+					tempPreview.CFrame = (CFrame.new(pastPos.Y, 5, pastPos.Z) + tempPreview:GetAttribute("PosOffset")) * CFrame.Angles(0, rotation, 0)
+				elseif tempPreview:IsA("BasePart") then
+					tempPreview.Position= Vector3.new(pastPos.Y, 5, pastPos.Z) + tempPreview:GetAttribute("PosOffset")
+					tempPreview.Rotation = Vector3.new(0, rotation, 0)
+				end
+			end
+			return
+		end
+		pastPos = pos.Position
+
+		local snappedX = snapToGrid(pos.Position.X) 
+		local snappedZ = snapToGrid(pos.Position.Z)
+
+		if tempPreview:IsA("Model") then
+			tempPreview.PrimaryPart.CFrame = (CFrame.new(snappedX, 5, snappedZ) + tempPreview:GetAttribute("PosOffset")) * CFrame.Angles(0, math.rad(rotation), 0)
+		elseif tempPreview:IsA("BasePart") then
+			tempPreview.Position= Vector3.new(snappedX, 5, snappedZ) + tempPreview:GetAttribute("PosOffset")
+			tempPreview.Rotation = Vector3.new(0, rotation, 0)
+		end
+	end)
+
+	UserInputService.InputBegan:Connect(function(input: InputObject, gameProcessedEvent: boolean) 
+		if input.UserInputType == Enum.UserInputType.MouseButton1 and not gameProcessedEvent and tempPreview ~= nil then
+			bufferItem(selected.Value)
+		elseif input.KeyCode == Enum.KeyCode.R then
+			rotation = rotation + RotateInterval.Value
+		elseif tempPreview == nil then
+			-- Only run selection logic if not interacting with UI
+			if input.KeyCode == Enum.KeyCode.E then
+				if outline then
+					outline:Destroy()
+					outline = nil
+					currentlySelected = nil
+				end
+
+				outline = Instance.new("SelectionBox")
+				outline.Adornee = currentlyHoveringOn
+				outline.Parent = currentlyHoveringOn
+				currentlySelected = currentlyHoveringOn
+
+				UserInterface.UpdatePropertyUI()
+			end
+		end
+	end)
+
+end
+
+function UserInterface.UpdatePropertyUI()
+
+	for _, v in pairs(propertiesDisplay:GetChildren()) do
+		if v:IsA("Frame") or v.Name == "Seperator" then
+			v:Destroy()
+		end
+	end
+
+	if currentlySelected == nil or currentlySelected == workspace.Baseplate then
+		propertiesTitle.Text = "Properties"
+		return
+	end
+
+	if currentlySelected.Parent:IsA("Model") then
+		currentlySelected = currentlySelected.Parent
+	end
+
+	propertiesTitle.Text = currentlySelected.Name
+	local configs = currentlySelected:FindFirstChild("Configs")
+	if configs then
+		local layOrder: number = 2
+		for _, v in pairs(configs:GetChildren()) do
+			if v:IsA("Folder") then
+				local seperator = propertiesDisplay:WaitForChild("Templates"):WaitForChild("Seperator"):Clone()
+				seperator.LayoutOrder = layOrder - 1
+				seperator.Text = v.Name
+				seperator.Parent = propertiesDisplay
+				seperator.Visible = true
+
+				for _, v2 in pairs(v:GetChildren()) do
+					createPropertyUi(v2, layOrder)
+					layOrder += 1
+				end
+			else
+				createPropertyUi(v, layOrder)
+				layOrder += 1
+			end
+
+		end
+	end
+
+end
+
+return UserInterface.new()
